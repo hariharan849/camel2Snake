@@ -3,15 +3,16 @@ sys.path.append(r'c:\users\hariharan\appdata\local\programs\python\python37-32\l
 sys.path.append(r'E:\python\textDifference')
 
 import os as _os
+import ast as _ast
 import tempfile as _tempfile
 import difflib as _difflib
-import astunparse as _astunparse
 from PyQt5 import (
     QtGui as _QtGui,
     QtCore as _QtCore,
     Qsci as _Qsci,
     QtWidgets as _QtWidgets
 )
+import autopep8
 from copy import copy
 from PyQt5 import QtGui
 from textEditor import SimplePythonEditor
@@ -41,20 +42,53 @@ class TextComparator(_QtWidgets.QWidget):
     def _initVariables(self, srcPath):
         self._srcPath = srcPath
         fd, self._dstPath = _tempfile.mkstemp()
-        codeFix = self._parseFile()
-        with open(srcPath, 'r') as fileObj:
-            srcLines = copy(fileObj.readlines())
 
-        for nodeType, nodeValues in codeFix.items():
-            for nodeFix in nodeValues:
-                srcLine = srcLines[nodeFix.lineNo - 1]
-                textLoc = srcLine.find(nodeFix.nodeName)
-                srcLines[nodeFix.lineNo - 1] = srcLine.replace(nodeFix.nodeName, nodeFix.fixName)
-                # srcLine[textLoc+len(nodeFix.nodeName):textLoc+len(nodeFix.nodeName)] = nodeFix.fixName
-                # nodeFix.nodeName, srcLines[nodeFix.lineNo])
+        with open(srcPath, 'r') as fileObj:
+            srcLines = copy(fileObj.read())
+
+        srcLines = autopep8.fix_code(srcLines, options={'aggressive': 1})
+        codeFix = self._parseFile(srcLines)
+        srcLines = srcLines.split("\n")
+
+        for (nodeType, nodeValues) in codeFix.items():
+            if nodeType == "NOT_USED":
+                continue
+
+            if nodeType in ("import", "from import"):
+                for nodeName, nodeFix in nodeValues.items():
+                    srcLine = srcLines[nodeFix.lineNo - 1]
+                    if nodeFix.fixName:
+                        srcLines[nodeFix.lineNo - 1] = srcLine.replace(nodeFix.nodeName, nodeFix.fixName)
+                        for dependent in nodeFix.dependencies:
+                            dependentLine = srcLines[dependent.lineNo - 1]
+                            dependentLine = dependentLine[:dependent.colOffset] + "_"+nodeFix.nodeName.strip() + dependentLine[dependent.colOffset+len(nodeFix.nodeName):]
+                            srcLines[dependent.lineNo-1] = dependentLine
+
+            elif nodeType == "function":
+                for nodeName, nodeFix in nodeValues.items():
+                    srcLine = srcLines[nodeFix.lineNo - 1]
+                    if nodeFix.fixName:
+                        srcLines[nodeFix.lineNo - 1] = srcLine.replace(nodeFix.nodeName, nodeFix.fixName)
+
+            elif nodeType in ["name", "attr"]:
+                for nodeName, nodeFix in nodeValues.items():
+                    srcLine = srcLines[nodeFix.lineNo - 1]
+                    if nodeFix.fixName:
+                        srcLines[nodeFix.lineNo - 1] = srcLine.replace(nodeFix.nodeName, nodeFix.fixName)
+
+        if codeFix["NOT_USED"]:
+            for actualNodeType, actualNodeValues in codeFix["NOT_USED"].items():
+
+                for nodeName, nodeNameValues in actualNodeValues.items():
+                    def fetchLineNo(val):
+                        return val.lineNo
+
+                    for unUsed in sorted(nodeNameValues, key=lambda val: fetchLineNo(val)):
+                        del srcLines[unUsed.lineNo - 1]
+
         with _os.fdopen(fd, 'w') as df:
             for line in srcLines:
-                df.write(line)
+                df.write(line+'\n')
         
         self._unique1Color = _QtGui.QColor(0x72, 0x9f, 0xcf, 80)
         self._unique2Color = _QtGui.QColor(0xad, 0x7f, 0xa8, 80)
@@ -62,24 +96,15 @@ class TextComparator(_QtWidgets.QWidget):
 
         imageScaleSize = _QtCore.QSize(16, 16)
         imageUnique1 = _QtGui.QPixmap(
-            _os.path.join(
-                r'E:\python\ExCo-master\resources',
-                r'tango_icons/diff-unique-1.png'
-            )
+            _os.path.join(_os.path.dirname(__file__), 'icons/diff-unique-1.png')
         )
 
         imageUnique2 = _QtGui.QPixmap(
-            _os.path.join(
-                r'E:\python\ExCo-master\resources',
-                r'tango_icons/diff-unique-2.png'
-            )
+            _os.path.join(_os.path.dirname(__file__), 'icons/diff-unique-2.png')
         )
 
         imageSimilar = _QtGui.QPixmap(
-            _os.path.join(
-                r'E:\python\ExCo-master\resources',
-                r'tango_icons/diff-similar.png'
-            )
+            _os.path.join(_os.path.dirname(__file__), 'icons/diff-similar.png')
         )
         # Scale the images to a smaller size
         self._imageUnique1 = imageUnique1.scaled(imageScaleSize)
@@ -92,7 +117,6 @@ class TextComparator(_QtWidgets.QWidget):
         self._focusedEditor = self.editorPython1
         self._focusedEditor.setFocus()
 
-        variables = ("_markerUnique", "_markerUniqueSymbol", "_markerSimilar", "_markerSimilarSymbol")
         for i, editor in enumerate((self.editorPython1, self.editorPython2), 1):
             # markers
             setattr(self, "_markerUnique{0}".format(i), editor.markerDefine(_Qsci.QsciScintillaBase.SC_MARK_BACKGROUND, 0))
@@ -120,9 +144,7 @@ class TextComparator(_QtWidgets.QWidget):
         editor.setMarginType(0, _Qsci.QsciScintilla.TextMargin)
         editor.setMarginType(1, _Qsci.QsciScintilla.SymbolMargin)
         editor.setMarginType(2, _Qsci.QsciScintilla.SymbolMargin)
-        #I DON'T KNOW THE ENTIRE LOGIC BEHIND MARKERS AND MARGINS! If you set
-        #something wrong in the margin mask, the markers on a different margin don't appear!
-        #http://www.scintilla.org/ScintillaDoc.html#SCI_SETMARGINMASKN
+
         editor.setMarginMarkerMask(
             1, ~_Qsci.QsciScintillaBase.SC_MASK_FOLDERS
         )
@@ -191,8 +213,9 @@ class TextComparator(_QtWidgets.QWidget):
         setEditorTheme(self.editorPython2)
 
 
-    def _parseFile(self):
-        tree = parseFile(self._srcPath)
+    def _parseFile(self, srcLines):
+        # tree = parseFile(self._srcPath)
+        tree = _ast.parse(srcLines)
         analyzer = Analyzer()
         analyzer.visit(tree)
         return analyzer.execFix()
@@ -394,13 +417,9 @@ class TextComparator(_QtWidgets.QWidget):
         self.editorPython2.setMarginWidth(0, "0" * len(str(self.editorPython2.lines())))
 
 
-def tetss():
-    pass
-
 if __name__ == "__main__":
     import sys
     app = _QtWidgets.QApplication(sys.argv)
     editor = TextComparator(r'E:\python\textDifference\test.py')
     editor.show()
-    # editor.setText(open(sys.argv[0]).read())
     app.exec_()
